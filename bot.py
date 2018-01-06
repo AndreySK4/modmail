@@ -1,7 +1,7 @@
 '''
 MIT License
 
-Copyright (c) 2017 verixx
+Copyright (c) 2017 Kyb3r
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -36,6 +36,10 @@ import sys
 import os
 import re
 import string
+import traceback
+import io
+import inspect
+from contextlib import redirect_stdout
 
 
 class Modmail(commands.Bot):
@@ -82,7 +86,7 @@ class Modmail(commands.Bot):
         data = {
                 "TOKEN" : token,
             }
-        with open('data/config.json','w') as f:
+        with open('config.json','w') as f:
             f.write(json.dumps(data, indent=4))
         print('------------------------------------------')
         print('Restarting...')
@@ -105,6 +109,12 @@ class Modmail(commands.Bot):
     async def on_connect(self):
         print('---------------')
         print('Modmail connected!')
+        status = os.getenv('STATUS')
+        if status:   
+            await self.change_presence(game=discord.Game(name=status))
+            print(f'Setting Status to {status}')
+        else:
+            print('No status set.')
 
     @property
     def guild_id(self):
@@ -118,7 +128,7 @@ class Modmail(commands.Bot):
         ---------------
         Client is ready!
         ---------------
-        Author: verixx#7220
+        Author: Kyb3r#7220
         ---------------
         Logged in as: {self.user}
         User ID: {self.user.id}
@@ -139,19 +149,21 @@ class Modmail(commands.Bot):
 
         return overwrites
 
-    def help_embed(self):
+    def help_embed(self, prefix):
         em = discord.Embed(color=0x00FFFF)
         em.set_author(name='Mod Mail - Help', icon_url=self.user.avatar_url)
         em.description = 'This bot is a python implementation of a stateless "Mod Mail" bot. ' \
-                         'Made by verixx and improved by the suggestions of others. This bot ' \
+                         'Made by Kyb3r and improved by the suggestions of others. This bot ' \
                          'saves no data and utilises channel topics for storage and syncing.' 
                  
 
-        cmds = '`m.setup [modrole] <- (optional)` - Command that sets up the bot.\n' \
-               '`m.reply <message...>` - Sends a message to the current thread\'s recipient.\n' \
-               '`m.close` - Closes the current thread and deletes the channel.\n' \
-               '`m.disable` - Closes all threads and disables modmail for the server.\n' \
-               '`m.customstatus` - Sets the Bot status to whatever you want.'
+        cmds = f'`{prefix}setup [modrole] <- (optional)` - Command that sets up the bot.\n' \
+               f'`{prefix}reply <message...>` - Sends a message to the current thread\'s recipient.\n' \
+               f'`{prefix}close` - Closes the current thread and deletes the channel.\n' \
+               f'`{prefix}disable` - Closes all threads and disables modmail for the server.\n' \
+               f'`{prefix}customstatus` - Sets the Bot status to whatever you want.' \
+               f'`{prefix}block` - Blocks a user from using modmail!' \
+               f'`{prefix}unblock` - Unblocks a user from using modmail!'
 
         warn = 'Do not manually delete the category or channels as it will break the system. ' \
                'Modifying the channel topic will also break the system.'
@@ -177,7 +189,7 @@ class Modmail(commands.Bot):
         c = await ctx.guild.create_text_channel(name='bot-info', category=categ)
         await c.edit(topic='Manually add user id\'s to block users.\n\n'
                            'Blocked\n-------\n\n')
-        await c.send(embed=self.help_embed())
+        await c.send(embed=self.help_embed(ctx.prefix))
         await ctx.send('Successfully set up server.')
 
     @commands.command()
@@ -200,7 +212,7 @@ class Modmail(commands.Bot):
 
 
     @commands.command(name='close')
-    @commands.has_permissions(manage_guild=True)
+    @commands.has_permissions(manage_channels=True)
     async def _close(self, ctx):
         '''Close the current thread.'''
         if 'User ID:' not in str(ctx.channel.topic):
@@ -231,9 +243,10 @@ class Modmail(commands.Bot):
             if role.permissions.manage_guild:
                 yield role
 
-    def format_info(self, user):
+    def format_info(self, message):
         '''Get information about a member of a server
         supports users from the guild or not.'''
+        user = message.author
         server = self.guild
         member = self.guild.get_member(user.id)
         avi = user.avatar_url
@@ -255,12 +268,15 @@ class Modmail(commands.Bot):
         em.set_footer(text='User ID: '+str(user.id))
         em.set_thumbnail(url=avi)
         em.set_author(name=user, icon_url=server.icon_url)
+      
 
         if member:
             em.add_field(name='Joined', value=str((time - member.joined_at).days)+' days ago.')
             em.add_field(name='Member No.',value=str(member_number),inline = True)
             em.add_field(name='Nick', value=member.nick, inline=True)
             em.add_field(name='Roles', value=rolenames, inline=True)
+        
+        em.add_field(name='Message', value=message.content, inline=False)
 
         return em
 
@@ -354,9 +370,7 @@ class Modmail(commands.Bot):
                 category=categ
                 )
             await channel.edit(topic=topic)
-            await channel.send('@here', embed=self.format_info(author))
-            await channel.send('\u200b')
-            await self.send_mail(message, channel, mod=False)
+            await channel.send('@here', embed=self.format_info(message))
 
     async def on_message(self, message):
         if message.author.bot:
@@ -385,7 +399,7 @@ class Modmail(commands.Bot):
         await ctx.send(f"Changed status to **{message}**")
 
     @commands.command()
-    @commands.has_permissions(manage_guild=True)
+    @commands.has_permissions(manage_channels=True)
     async def block(self, ctx, id=None):
         '''Block a user from using modmail.'''
         if id is None:
@@ -406,7 +420,7 @@ class Modmail(commands.Bot):
             await ctx.send('User is already blocked.')
 
     @commands.command()
-    @commands.has_permissions(manage_guild=True)
+    @commands.has_permissions(manage_channels=True)
     async def unblock(self, ctx, id=None):
         '''Unblocks a user from using modmail.'''
         if id is None:
@@ -425,6 +439,74 @@ class Modmail(commands.Bot):
             await ctx.send('User successfully unblocked!')
         else:
             await ctx.send('User is not already blocked.')
+
+    @commands.command(hidden=True, name='eval')
+    async def _eval(self, ctx, *, body: str):
+        """Evaluates python code"""
+        allowed = [int(x) for x in os.getenv('OWNERS', '').split(',')]
+        if ctx.author.id not in allowed: 
+            return
+        
+        env = {
+            'bot': self,
+            'ctx': ctx,
+            'channel': ctx.channel,
+            'author': ctx.author,
+            'guild': ctx.guild,
+            'message': ctx.message,
+            'source': inspect.getsource
+        }
+
+        env.update(globals())
+
+        body = self.cleanup_code(body)
+        stdout = io.StringIO()
+        err = out = None
+
+        to_compile = f'async def func():\n{textwrap.indent(body, "  ")}'
+
+        try:
+            exec(to_compile, env)
+        except Exception as e:
+            err = await ctx.send(f'```py\n{e.__class__.__name__}: {e}\n```')
+            return await err.add_reaction('\u2049')
+
+        func = env['func']
+        try:
+            with redirect_stdout(stdout):
+                ret = await func()
+        except Exception as e:
+            value = stdout.getvalue()
+            err = await ctx.send(f'```py\n{value}{traceback.format_exc()}\n```')
+        else:
+            value = stdout.getvalue()
+            if ret is None:
+                if value:
+                    try:
+                        out = await ctx.send(f'```py\n{value}\n```')
+                    except:
+                        await ctx.send('```Result is too long to send.```')
+            else:
+                self._last_result = ret
+                try:
+                    out = await ctx.send(f'```py\n{value}{ret}\n```')
+                except:
+                    await ctx.send('```Result is too long to send.```')
+        if out:
+            await ctx.message.add_reaction('\u2705') #tick
+        if err:
+            await ctx.message.add_reaction('\u2049') #x
+        else:
+            await ctx.message.add_reaction('\u2705')
+
+    def cleanup_code(self, content):
+        """Automatically removes code blocks from the code."""
+        # remove ```py\n```
+        if content.startswith('```') and content.endswith('```'):
+            return '\n'.join(content.split('\n')[1:-1])
+
+        # remove `foo`
+        return content.strip('` \n')
 
 
                 
